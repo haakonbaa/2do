@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -28,8 +29,11 @@ Usage:
 
 The commands are:
     list      list all tasks        
+			  -l --limit <limit>
+			  -t --theme <theme1,theme2,...>
     add       add a new task
               <start time> <stop time> <description> <theme>
+			  -r, --repeat <repeat days> <repeat times>
     delete    delete one or more tasks 
               <id> [<id> ...]
     done      mark one or more tasks as done
@@ -77,7 +81,7 @@ func main() {
 		fmt.Println(HELPMSG)
 		os.Exit(0)
 	case "list":
-		listTasks(db)
+		listTasks(db, args[1:])
 		os.Exit(0)
 	case "delete":
 		// Delete an event from the tasks table
@@ -136,7 +140,7 @@ func parseTime(timeString string) (time.Time, error) {
 	}
 	joinedTimeString := ""
 	for i := 0; i < len(timeNowString); i++ {
-		if i < l-m+1 {
+		if i < l-m {
 			joinedTimeString += string(timeNowString[i])
 		} else {
 			joinedTimeString += string(timeString[i])
@@ -206,16 +210,105 @@ func addTask(db *sql.DB, args []string) {
 		os.Exit(1)
 	}
 
-	_, err = db.Exec(insertEvent, startTime, stopTime, description, theme, false)
-	if err != nil {
-		log.Fatal(err)
+	repeatDays := 0
+	repeatTimes := 1
+
+	flag, done := popArg()
+	if !done {
+		switch flag {
+		case "-r", "--repeat":
+
+			// Repeat days
+			repeatDaysStr, done := popArg()
+			if done {
+				fmt.Printf("No repeat days provided with --repeat.\n")
+				os.Exit(1)
+			}
+			if _, err := fmt.Sscanf(repeatDaysStr, "%d", &repeatDays); err != nil {
+				fmt.Printf("Error parsing repeat days: %v\n", err)
+				os.Exit(1)
+			}
+			if repeatDays < 1 {
+				fmt.Printf("Repeat days must be greater than 0.\n")
+				os.Exit(1)
+			}
+
+			// Repeat times
+			repeatTimesStr, done := popArg()
+			if done {
+				fmt.Printf("No repeat times provided with --repeat.\n")
+				os.Exit(1)
+			}
+			if _, err := fmt.Sscanf(repeatTimesStr, "%d", &repeatTimes); err != nil {
+				fmt.Printf("Error parsing repeat times: %v\n", err)
+				os.Exit(1)
+			}
+			if repeatTimes < 1 {
+				fmt.Printf("Repeat times must be greater than 0.\n")
+				os.Exit(1)
+			}
+		}
+
 	}
 
-	fmt.Println("Event inserted successfully.")
-
+	for i := 0; i < repeatTimes; i++ {
+		start := startTime.AddDate(0, 0, repeatDays*i)
+		stop := stopTime.AddDate(0, 0, repeatDays*i)
+		desc := strings.Replace(description, "%d", fmt.Sprintf("%d", i), -1)
+		desc = strings.Replace(description, "%D", fmt.Sprintf("%d", i+1), -1)
+		_, err = db.Exec(insertEvent, start, stop, desc, theme, false)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 }
 
-func listTasks(db *sql.DB) {
+func listTasks(db *sql.DB, args []string) {
+	_i := 0
+	popArg := func() (string, bool) {
+		if _i >= len(args) {
+			return "", true
+		}
+		_i++
+		return args[_i-1], false
+	}
+
+	limit := -1
+	filterByTheme := false
+	filterThemes := make([]string, 0)
+	for {
+		arg, done := popArg()
+		if done {
+			break
+		}
+		switch arg {
+		case "-l", "--limit":
+			l, done := popArg()
+			if done {
+				fmt.Printf("No limit provided with --limit.\n")
+				os.Exit(1)
+			}
+			if _, err := fmt.Sscanf(l, "%d", &limit); err != nil {
+				fmt.Printf("Error parsing limit: %v\n", err)
+				os.Exit(1)
+			}
+		case "-t", "--theme":
+			filterByTheme = true
+			themes, done := popArg()
+			if done {
+				fmt.Printf("No theme provided with --theme.\n")
+				os.Exit(1)
+			}
+			for _, v := range strings.Split(themes, ",") {
+				filterThemes = append(filterThemes,
+					strings.ToLower(strings.Trim(v, " ")))
+			}
+		default:
+			fmt.Printf("Unknown argument: %s\n", arg)
+			os.Exit(1)
+		}
+	}
+
 	// only list tasks that are not done
 	listTasks := `
 		SELECT * FROM tasks WHERE is_done = false ORDER BY stop_time ASC
@@ -228,7 +321,12 @@ func listTasks(db *sql.DB) {
 	defer rows.Close()
 
 	// Iterate over the rows and print the results
-	for rows.Next() {
+	for rowNum := 0; rows.Next(); rowNum++ {
+		// TODO: change the query instead of querying all tasks
+		// and filtering afterwards
+		if rowNum == limit {
+			break
+		}
 		var (
 			id          int
 			startTime   time.Time
@@ -239,6 +337,15 @@ func listTasks(db *sql.DB) {
 		)
 		if err := rows.Scan(&id, &startTime, &stopTime, &description, &theme, &isDone); err != nil {
 			log.Fatal(err)
+		}
+
+		// filter by name
+		// TODO: include this in query instead
+		if filterByTheme {
+			if !sliceContains(filterThemes, strings.ToLower(theme)) {
+				rowNum--
+				continue
+			}
 		}
 
 		// format color of start time
@@ -273,4 +380,13 @@ func listTasks(db *sql.DB) {
 		log.Fatal(err)
 	}
 
+}
+
+func sliceContains[T comparable](s []T, el T) bool {
+	for _, v := range s {
+		if v == el {
+			return true
+		}
+	}
+	return false
 }
