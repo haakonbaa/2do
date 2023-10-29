@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,14 +106,27 @@ func main() {
 			UPDATE tasks SET is_done = true WHERE id = $1
 		`
 		ids := args[1:]
-		if len(ids) == 0 {
-			fmt.Printf("No ids provided to mark as done.")
+		intIds := make([]int, 0, len(ids))
+		for _, id := range ids {
+			if id == "-u" || id == "--undo" {
+				doneEvent = `UPDATE tasks SET is_done = false WHERE id = $1`
+				continue
+			}
+			idAsInt, err := strconv.Atoi(id)
+			if err != nil {
+				fmt.Printf("Error parsing id %s: %v\n", id, err)
+				os.Exit(1)
+			}
+			intIds = append(intIds, idAsInt)
+		}
+		if len(intIds) == 0 {
+			fmt.Printf("No ids provided to mark as done.\n")
 			os.Exit(1)
 		}
-		for _, id := range ids {
+		for _, id := range intIds {
 			_, err := db.Exec(doneEvent, id)
 			if err != nil {
-				fmt.Printf("Error marking event with id %s as done: %v\n", id, err)
+				fmt.Printf("Error marking event with id %v as done: %v\n", id, err)
 			}
 		}
 		os.Exit(0)
@@ -371,7 +385,7 @@ func listTasks(db *sql.DB, args []string) {
 		}
 
 		// format color of end time
-		fmt.Printf("\x1b[34m%04d\x1b[0m: %s - %s [%s] \x1b[38;5;%vm%s\x1b[0m, \x1b[38;5;8m%s\x1b[0m\n",
+		fmt.Printf("\x1b[34m%05d\x1b[0m: %s - %s [%s] \x1b[38;5;%vm%6s\x1b[0m, \x1b[38;5;8m%s\x1b[0m\n",
 			id, startString, stopString, doneMarker, 8 /*rand.Intn(256)*/, theme, description)
 	}
 
