@@ -4,6 +4,7 @@ services:
   postgres:
     image: postgres:latest
     container_name: 2do-db
+    restart: always
     environment:
       POSTGRES_DB: 2do
       POSTGRES_USER: user
